@@ -2,6 +2,7 @@
 
 import os
 from datetime import datetime
+import hashlib
 import exifread
 from hachoir.parser import createParser
 from hachoir.metadata import extractMetadata
@@ -9,6 +10,19 @@ from hachoir.metadata import extractMetadata
 # Список поддерживаемых расширений файлов (в нижнем регистре)
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".heic", ".dng"}
 VIDEO_EXTENSIONS = {".mov", ".mp4"}
+
+# Храним информацию о уже обработанных файлах,
+# чтобы находить и удалять дубликаты
+processed_files = {}
+
+
+def sha256sum(path, chunk_size=8192):
+    """Возвращает SHA256-хеш файла."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(chunk_size), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 # Получаем имя самого скрипта, чтобы его не переименовывать
 script_name = os.path.basename(__file__)
@@ -112,18 +126,41 @@ for file_name in os.listdir("."):
     formatted_date = capture_datetime.strftime("%Y.%m.%d.%H.%M.%S")
     new_name = formatted_date + ext  # используем исходное расширение файла
 
+    capture_key = formatted_date
+    file_hash = sha256sum(file_name)
+
+    if capture_key not in processed_files:
+        processed_files[capture_key] = []
+
+    duplicate = False
+    for info in processed_files[capture_key]:
+        if info["hash"] == file_hash:
+            os.remove(file_name)
+            print(
+                f"Удален дубликат \"{file_name}\" (совпадает с \"{info['name']}\")"
+            )
+            duplicate = True
+            break
+
+    if duplicate:
+        continue
+
     # Проверяем, не совпадает ли новое имя со старым
     if new_name == file_name:
-        # Уже правильно назван, пропускаем
+        # Уже правильно назван, запоминаем информацию и пропускаем
+        processed_files[capture_key].append({"hash": file_hash, "name": file_name})
         continue
 
     # Если файл с новым именем уже существует, чтобы не затереть, пропустим такой файл
     if os.path.exists(new_name):
         print(f"Файл с именем {new_name} уже существует. Пропуск переименования для {file_name}.")
+        processed_files[capture_key].append({"hash": file_hash, "name": file_name})
         continue
 
     try:
         os.rename(file_name, new_name)
         print(f"Переименован: \"{file_name}\" -> \"{new_name}\"")
+        processed_files[capture_key].append({"hash": file_hash, "name": new_name})
     except Exception as e:
         print(f"Ошибка переименования \"{file_name}\": {e}")
+        processed_files[capture_key].append({"hash": file_hash, "name": file_name})
